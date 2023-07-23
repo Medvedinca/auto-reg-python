@@ -3,7 +3,7 @@ import telebot
 from json_io import read, write
 from event import event
 
-API_TOKEN = ''
+API_TOKEN = '6279188497:AAFJ6626sviZXOm3BxMrA1kG58GxnvYm0-E'
 
 FILE_PATH = 'data.json'
 

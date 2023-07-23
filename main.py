@@ -2,6 +2,7 @@ import requests
 import time
 import random
 from selenium import webdriver
+from seleniumwire import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.by import By 
 from selenium.webdriver.support import expected_conditions as EC
@@ -14,12 +15,11 @@ from json_io import read, write
 
 # Задаём необходимые пути и константы 
 URL = "https://winline.ru/registration"
+# URL = "http://httpbin.org/ip"
 FILE_PATH = 'data.json'
 API_NAME = 'sms_activate'
-GCD = 2
+GCD = 10
 THREADS_COUNT = 2
-OPERATOR_LIST = 'any'
-PREFIX_LIST = ['977', '901', '951', '952']
 
 
 # Глобальный массив ошибок
@@ -27,10 +27,45 @@ errors = []
 
 
 # Получаем массив прокси
-proxy = []
+proxies = []
 with open('proxy.txt', 'r') as f:
     for line in f:
-        proxy.append(line.strip())
+        proxies.append(line.strip())
+
+
+def black_prefix(number):
+    prefix = str(number)[0:3]
+
+    black = read('black.json')
+    if prefix in black:
+        return False
+    else:
+        return True
+
+
+def check_prefix(number, bet):
+    prefix = str(number)[0:3]
+
+    data = read('prefix.json')
+
+    if prefix not in data:
+        data[prefix] = {"good": 0, "bad": 0}
+        write('prefix.json', data)
+
+    if bet == None or bet <= 100:
+        data = read('prefix.json')
+        data[prefix]['bad'] += 1
+        write('prefix.json', data)
+    else:
+        data = read('prefix.json')
+        data[prefix]['good'] += 1
+        write('prefix.json', data)
+
+    data = read('prefix.json')
+    black = read('black.json')
+    if (data[prefix]['bad'] >= 5) and (prefix not in black):
+        black[prefix] = 'BAD!'
+        write('black.json', black)
 
 
 # Проверяем прокси на работоспособность 
@@ -45,15 +80,34 @@ def check_proxy(px):
 
 
 # Инициализация драйвера Chrome, разворачивание полного экрана, подключение
-def init(url):
-    options = webdriver.ChromeOptions()
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    # options.add_argument('--proxy-server=http://%s' % proxy)
+def init(url, proxies):
+    chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    proxy = random.choice(proxies)
+    options = {
+        'proxy':{
+            'https': f'{proxy}',
+            'http': f'{proxy}',
+            'verify_ssl': True
+        }
+    }
+    # chrome_options.add_argument('--proxy-server=%s' % proxy)
     # options.add_argument("--headless")
-    driver = webdriver.Chrome(options=options)
+    driver = webdriver.Chrome(options=chrome_options, seleniumwire_options=options)
     driver.maximize_window()
     driver.get(url)
     return driver
+
+
+def wait_enter(driver):
+    try:
+        WebDriverWait(driver, GCD).until(
+            EC.presence_of_element_located((By.XPATH, "//ww-shared-phone-input/div/input")))
+        return False
+    except:
+        print("Connection error!")
+        driver.quit()
+        return True
 
 
 # Ожидание кликабельности элемента и ввод мобильного номера
@@ -129,9 +183,9 @@ def check_freebet(driver):
         WebDriverWait(driver, GCD).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "get-freebet-dialog__number")))
         bet = driver.find_elemen(By.CSS_SELECTOR, "get-freebet-dialog__number").text
-        return bet
+        return int(bet)
     except:
-        driver.quit()
+        print("No freebet!")
 
 
 # Запуск отдельного потока для телеграм бота 
@@ -144,9 +198,16 @@ def bot_thread_run(target):
 def registration():
     global errors
     sa = smsactivate.sms_init(FILE_PATH, API_NAME)
-    # if smsactivate.check_balance(sa, errors):  
-    number, _id = smsactivate.get_number(sa)   
-    driver = init(URL)
+    if smsactivate.check_balance(sa, errors):
+        send_message('Недостаточно средств, проверьте баланс.')
+        event.clear()
+        return
+    driver = init(URL, proxies)
+    if wait_enter(driver):
+        return
+    number, _id = smsactivate.get_number(sa)
+    if not black_prefix(number):
+        return
     password = gen_pass()
     number = str(number)[1:]
     send_data(number, password)
@@ -158,16 +219,17 @@ def registration():
     agreement_accept(driver)
     code = smsactivate.wait_code(sa, _id)
     send_code(driver, code)
-    time.sleep(10)
+    time.sleep(5)
     next_page(driver)
     smsactivate.confirm(sa, _id)
     bet = check_freebet(driver)
-    if int(bet) >= 100:
+    check_prefix(number, bet)
+    if (bet >= 100) and (not bet == None):
         send_data(number, password)
-        send_message("Размер фрибета: ", bet)           
-    time.sleep(1000)
-    # else:
-        # event.clear()        
+        send_message("Размер фрибета: ", bet)
+        driver.quit()
+    else:
+        driver.quit()
 
 
 def main():
@@ -196,15 +258,15 @@ def main():
     #                     send_message(errors)
     #                 errors = []
     #                 break
-
+    #
     #             if exe._work_queue.qsize() > THREADS_COUNT:
     #                 time.sleep(0.1)
     #                 continue
     #             exe.submit(registration)
 
 
-    registration()            
+    # registration()
 
 
 if __name__ == "__main__":
-	main()   
+	main()
